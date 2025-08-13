@@ -1,0 +1,82 @@
+plugins {
+    id 'java'
+    id "application"
+}
+
+application {
+    mainClass.set("Main")
+}
+
+repositories {
+    mavenLocal()
+    maven {
+        url = uri('https://repo.maven.apache.org/maven2/')
+    }
+    maven {
+        url = uri('https://maven.scijava.org/content/groups/public')
+    }
+}
+configurations.all {
+    resolutionStrategy {
+        force 'com.google.guava:guava:30.1.1-jre'
+
+        eachDependency { DependencyResolveDetails details ->
+            if (details.requested.group == 'com.google.guava' && details.requested.name == 'guava') {
+                details.useVersion '30.1.1-jre'
+            }
+            if (details.requested.name == 'aws-java-sdk-kms') {
+                details.useVersion '1.12.772'
+            }
+            if (details.requested.name == 'aws-java-sdk-core') {
+                details.useVersion '1.12.772'
+            }
+            if (details.requested.name == 'aws-java-sdk-s3') {
+                details.useVersion '1.12.772'
+            }
+        }
+    }
+}
+
+def os = System.getProperty("os.name").toLowerCase()
+dependencies {
+
+    implementation('sc.fiji:bigvolumeviewer:0.4.1') {
+        exclude group: "com.googlecode.combinatoricslib", module: "combinatoricsLib"
+        exclude group: "org.jogamp.gluegen", module: "gluegen-rt"
+        exclude group: "org.jogamp.jogl", module: "jogl-all"
+        exclude group: 'com.google.guava', module: 'guava'
+    }
+
+    implementation "org.janelia.saalfeldlab:n5-viewer_fiji:6.1.2"
+    implementation "org.janelia.saalfeldlab:n5-universe:2.3.0"
+
+    implementation 'org.jogamp.gluegen:gluegen-rt:2.5.0'
+    implementation 'org.jogamp.jogl:jogl-all:2.5.0'
+
+    if (os.contains("linux")) {
+        implementation 'org.jogamp.gluegen:gluegen-rt:2.5.0:natives-linux-amd64'
+        implementation 'org.jogamp.jogl:jogl-all:2.5.0:natives-linux-amd64'
+    }
+
+    if (os.contains("windows")) {
+        implementation 'org.jogamp.gluegen:gluegen-rt:2.5.0:natives-windows-amd64'
+        implementation 'org.jogamp.jogl:jogl-all:2.5.0:natives-windows-amd64'
+    }
+
+    if (os.contains("mac")) {
+        implementation 'org.jogamp.gluegen:gluegen-rt:2.5.0:natives-macosx-universal'
+        implementation 'org.jogamp.jogl:jogl-all:2.5.0:natives-macosx-universal'
+    }
+}
+ configurations.all {
+   exclude group: 'org.scijava', module: 'scripting-jython'
+   exclude group: 'net.imagej', module: 'imagej-legacy'
+   exclude group: 'net.imagej', module: 'ij'
+   exclude group: 'net.imagej', module: 'ij1-patcher'
+ }
+
+java.sourceCompatibility = JavaVersion.VERSION_1_8
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
