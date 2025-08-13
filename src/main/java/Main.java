@@ -1,8 +1,10 @@
 import bdv.cache.SharedQueue;
+import bdv.tools.brightness.ConverterSetup;
 import bdv.util.BdvOptions;
 import bdv.viewer.SourceAndConverter;
 import bvv.vistools.Bvv;
 import bvv.vistools.BvvFunctions;
+import mpicbg.spim.data.generic.AbstractSpimData;
 import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.N5URI;
 import org.janelia.saalfeldlab.n5.bdv.N5Viewer;
@@ -16,6 +18,8 @@ import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+
+import static org.janelia.saalfeldlab.n5.bdv.N5Viewer.buildN5Sources;
 
 
 public class Main {
@@ -33,7 +37,7 @@ public class Main {
 
     public static void showInBvv(N5URI uri, N5Reader n5) throws IOException {
 
-        ArrayList sourcesAndConverters = getSourcesAndConverters(uri, n5);
+        List sourcesAndConverters = getSourcesAndConverters(uri, n5);
         Bvv bvv = BvvFunctions.show(Bvv.options().frameTitle("BigVolumeViewer").
                 dCam(dCam).
                 dClipNear(dClipNear).
@@ -45,11 +49,15 @@ public class Main {
                 maxCacheSizeInMB(maxCacheSizeInMB).
                 ditherWidth(ditherWidth)
         );
-        BvvFunctions.show(((SourceAndConverter) sourcesAndConverters.get(0)).getSpimSource(),
+        final AbstractSpimData< ? > spimData = SourceToSpimDataWrapper.wrap( ((SourceAndConverter) sourcesAndConverters.get(0)).getSpimSource() );
+
+        BvvFunctions.show(spimData,
                 Bvv.options().addTo( bvv ));
     }
 
-    private static ArrayList getSourcesAndConverters(N5URI uri, N5Reader n5) throws IOException {
+    private static List getSourcesAndConverters(N5URI uri, N5Reader n5) throws IOException {
+
+
         String rootGroup = uri.getGroupPath() != null ? uri.getGroupPath() : "/";
         List<N5Metadata> metadataList = new ArrayList();
         N5Metadata rootMetadata = N5MetadataUtils.parseMetadata(n5, rootGroup);
@@ -59,15 +67,25 @@ public class Main {
 
         metadataList.add(rootMetadata);
 
-        ArrayList converterSetups = new ArrayList();
-        ArrayList sourcesAndConverters = new ArrayList();
+        final DataSelection selection = new DataSelection(n5, metadataList);
+        final SharedQueue sharedQueue = new SharedQueue(Math.max(1, Runtime.getRuntime().availableProcessors() / 2));
+        final List<ConverterSetup> converterSetups = new ArrayList<>();
+        final List sourcesAndConverters = new ArrayList<>();
 
-        int numTimePoints = 1;
-        SharedQueue sharedQueue= new SharedQueue(1);
-        BdvOptions bdvOptions = new BdvOptions();
-        for(N5Metadata metadata : metadataList) {
-            DataSelection selection = new DataSelection(n5, Collections.singletonList(metadata));
-            numTimePoints = Math.max(numTimePoints, N5Viewer.buildN5Sources(n5, selection, sharedQueue, converterSetups, sourcesAndConverters, bdvOptions));
+        final BdvOptions options = BdvOptions.options().frameTitle("N5 Viewer");
+        int numTimepoints;
+        try {
+            numTimepoints = buildN5Sources(
+                    n5,
+                    selection,
+                    sharedQueue,
+                    converterSetups,
+                    sourcesAndConverters,
+                    options);
+
+        } catch (final IOException e1) {
+            e1.printStackTrace();
+            return null;
         }
 
         if (sourcesAndConverters.isEmpty()) {
@@ -84,7 +102,7 @@ public class Main {
 
         String uri;
         if(args.length == 0) {
-            uri = "https://hifis-storage.desy.de:2443/Helmholtz/HIP/collaborations/2405_MDC_Treier/public/G5111-S4/all?";
+            uri = "https://hifis-storage.desy.de:2443/Helmholtz/HIP/collaborations/2405_MDC_Treier/public/G5111-S4/561nm_tdTomato?";
         } else {
             uri = args[0];
         }
