@@ -20,20 +20,30 @@ import java.util.List;
 
 public class Main {
 
+    static double dCam = 3000;
+    static double dClipNear = 1000.;
+    static double dClipFar = 15000.;
+
+    static int renderWidth = 800;
+    static int renderHeight = 600;
+    static int numDitherSamples = 3;
+    static int cacheBlockSize = 32;
+    static int maxCacheSizeInMB = 500;
+    static int ditherWidth = 3;
+
     public static void showInBvv(N5URI uri, N5Reader n5) throws IOException {
 
         ArrayList sourcesAndConverters = getSourcesAndConverters(uri, n5);
-        BvvSettings.readBVVRenderSettings();
         Bvv bvv = BvvFunctions.show(Bvv.options().frameTitle("BigVolumeViewer").
-                dCam(BvvSettings.dCam).
-                dClipNear(BvvSettings.dClipNear).
-                dClipFar(BvvSettings.dClipFar).
-                renderWidth(BvvSettings.renderWidth).
-                renderHeight(BvvSettings.renderHeight).
-                numDitherSamples(BvvSettings.numDitherSamples).
-                cacheBlockSize(BvvSettings.cacheBlockSize).
-                maxCacheSizeInMB(BvvSettings.maxCacheSizeInMB).
-                ditherWidth(BvvSettings.ditherWidth)
+                dCam(dCam).
+                dClipNear(dClipNear).
+                dClipFar(dClipFar).
+                renderWidth(renderWidth).
+                renderHeight(renderHeight).
+                numDitherSamples(numDitherSamples).
+                cacheBlockSize(cacheBlockSize).
+                maxCacheSizeInMB(maxCacheSizeInMB).
+                ditherWidth(ditherWidth)
         );
         BvvFunctions.show(((SourceAndConverter) sourcesAndConverters.get(0)).getSpimSource(),
                 Bvv.options().addTo( bvv ));
