@@ -22,6 +22,24 @@ public class Main {
 
     public static void showInBvv(N5URI uri, N5Reader n5) throws IOException {
 
+        ArrayList sourcesAndConverters = getSourcesAndConverters(uri, n5);
+        BvvSettings.readBVVRenderSettings();
+        Bvv bvv = BvvFunctions.show(Bvv.options().frameTitle("BigVolumeViewer").
+                dCam(BvvSettings.dCam).
+                dClipNear(BvvSettings.dClipNear).
+                dClipFar(BvvSettings.dClipFar).
+                renderWidth(BvvSettings.renderWidth).
+                renderHeight(BvvSettings.renderHeight).
+                numDitherSamples(BvvSettings.numDitherSamples).
+                cacheBlockSize(BvvSettings.cacheBlockSize).
+                maxCacheSizeInMB(BvvSettings.maxCacheSizeInMB).
+                ditherWidth(BvvSettings.ditherWidth)
+        );
+        BvvFunctions.show(((SourceAndConverter) sourcesAndConverters.get(0)).getSpimSource(),
+                Bvv.options().addTo( bvv ));
+    }
+
+    private static ArrayList getSourcesAndConverters(N5URI uri, N5Reader n5) throws IOException {
         String rootGroup = uri.getGroupPath() != null ? uri.getGroupPath() : "/";
         List<N5Metadata> metadataList = new ArrayList();
         N5Metadata rootMetadata = N5MetadataUtils.parseMetadata(n5, rootGroup);
@@ -45,20 +63,7 @@ public class Main {
         if (sourcesAndConverters.isEmpty()) {
             throw new IOException("N5ImageData: No datasets found.");
         }
-        BvvSettings.readBVVRenderSettings();
-        Bvv bvv = BvvFunctions.show(Bvv.options().frameTitle("BigVolumeViewer").
-                dCam(BvvSettings.dCam).
-                dClipNear(BvvSettings.dClipNear).
-                dClipFar(BvvSettings.dClipFar).
-                renderWidth(BvvSettings.renderWidth).
-                renderHeight(BvvSettings.renderHeight).
-                numDitherSamples(BvvSettings.numDitherSamples).
-                cacheBlockSize(BvvSettings.cacheBlockSize).
-                maxCacheSizeInMB(BvvSettings.maxCacheSizeInMB).
-                ditherWidth(BvvSettings.ditherWidth)
-        );
-        BvvFunctions.show(((SourceAndConverter) sourcesAndConverters.get(0)).getSpimSource(),
-                Bvv.options().addTo( bvv ));
+        return sourcesAndConverters;
     }
 
     public static void showInBdv(N5URI n5URI) {
@@ -75,7 +80,7 @@ public class Main {
         }
         N5URI n5URI = new N5URI(uri);
 
-        showInBdv(n5URI);
+//        showInBdv(n5URI);
 
         N5Factory n5Factory = new N5Factory();
         N5Reader n5 = n5Factory.openReader(uri);
