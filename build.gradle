@@ -40,7 +40,8 @@ configurations.all {
 def os = System.getProperty("os.name").toLowerCase()
 dependencies {
 
-    implementation('sc.fiji:bigvolumeviewer:0.4.1') {
+//    implementation('sc.fiji:bigvolumeviewer:0.4.1') {
+    implementation('nl.uu.science.cellbiology:bvv-playground:0.4.0') {
         exclude group: "com.googlecode.combinatoricslib", module: "combinatoricsLib"
         exclude group: "org.jogamp.gluegen", module: "gluegen-rt"
         exclude group: "org.jogamp.jogl", module: "jogl-all"
@@ -68,12 +69,12 @@ dependencies {
         implementation 'org.jogamp.jogl:jogl-all:2.5.0:natives-macosx-universal'
     }
 }
- configurations.all {
-   exclude group: 'org.scijava', module: 'scripting-jython'
-   exclude group: 'net.imagej', module: 'imagej-legacy'
-   exclude group: 'net.imagej', module: 'ij'
-   exclude group: 'net.imagej', module: 'ij1-patcher'
- }
+// configurations.all {
+//   exclude group: 'org.scijava', module: 'scripting-jython'
+//   exclude group: 'net.imagej', module: 'imagej-legacy'
+//   exclude group: 'net.imagej', module: 'ij'
+//   exclude group: 'net.imagej', module: 'ij1-patcher'
+// }
 
 java.sourceCompatibility = JavaVersion.VERSION_1_8
 

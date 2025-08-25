@@ -1,9 +1,17 @@
+import bdv.cache.CacheControl;
 import bdv.cache.SharedQueue;
 import bdv.tools.brightness.ConverterSetup;
+import bdv.util.Bdv;
+import bdv.util.BdvFunctions;
 import bdv.util.BdvOptions;
+import bdv.viewer.BasicViewerState;
 import bdv.viewer.SourceAndConverter;
-import bvv.vistools.Bvv;
-import bvv.vistools.BvvFunctions;
+import bdv.viewer.SynchronizedViewerState;
+import bdv.viewer.ViewerState;
+import bvvpg.source.converters.ConverterSetupsPG;
+import bvvpg.vistools.Bvv;
+import bvvpg.vistools.BvvFunctions;
+import bvvpg.vistools.BvvGamma;
 import mpicbg.spim.data.generic.AbstractSpimData;
 import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.N5URI;
@@ -13,10 +21,9 @@ import org.janelia.saalfeldlab.n5.universe.N5Factory;
 import org.janelia.saalfeldlab.n5.universe.N5MetadataUtils;
 import org.janelia.saalfeldlab.n5.universe.metadata.N5Metadata;
 
+import java.io.File;
 import java.io.IOException;
-import java.net.URISyntaxException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 import static org.janelia.saalfeldlab.n5.bdv.N5Viewer.buildN5Sources;
@@ -32,10 +39,10 @@ public class Main {
     static int renderHeight = 600;
     static int numDitherSamples = 3;
     static int cacheBlockSize = 32;
-    static int maxCacheSizeInMB = 500;
+    static int maxCacheSizeInMB = 7000;
     static int ditherWidth = 3;
 
-    public static void showInBvv(N5URI uri, N5Reader n5) throws IOException {
+    public static Bvv showInBvv(N5URI uri, N5Reader n5) throws IOException {
 
         List sourcesAndConverters = getSourcesAndConverters(uri, n5);
         Bvv bvv = BvvFunctions.show(Bvv.options().frameTitle("BigVolumeViewer").
@@ -49,10 +56,36 @@ public class Main {
                 maxCacheSizeInMB(maxCacheSizeInMB).
                 ditherWidth(ditherWidth)
         );
-        final AbstractSpimData< ? > spimData = SourceToSpimDataWrapper.wrap( ((SourceAndConverter) sourcesAndConverters.get(0)).getSpimSource() );
+//        SourceAndConverter spimData = (SourceAndConverter) sourcesAndConverters.get(0);
+        sourcesAndConverters.forEach(soc -> {
+            final AbstractSpimData< ? > spimData = SourceToSpimDataWrapper.wrap( ((SourceAndConverter) soc).getSpimSource() );
+            BvvFunctions.show(spimData,
+                    Bvv.options().addTo( bvv ));
+        });
+        return bvv;
 
-        BvvFunctions.show(spimData,
-                Bvv.options().addTo( bvv ));
+    }
+
+
+    public static void renderInBvv(N5URI uri, N5Reader n5) throws Exception {
+        final java.util.List<SourceAndConverter<?>> socs = getSourcesAndConverters(uri, n5);
+
+        final ViewerState state = new SynchronizedViewerState(new BasicViewerState());
+        state.setNumTimepoints(1);
+
+        int setupId = 0;
+        final ConverterSetupsPG setups = new ConverterSetupsPG(state);
+
+        for (SourceAndConverter<?> soc : socs) {
+            state.addSource(soc);
+            state.setSourceActive(soc, true);
+            final bdv.tools.brightness.ConverterSetup gcs = BvvGamma.createConverterSetupBT(soc, setupId++);
+            gcs.setDisplayRange(250, 2000);
+            setups.put(soc, gcs);
+        }
+
+        BvvRotateMovie movieGenerator = new BvvRotateMovie(state, setups, new CacheControl.Dummy(), 1920, 1080);
+        movieGenerator.recordRotateMovie(32, new File("/home/random/Development/hi/collabs/treier/bvv/frames"));
     }
 
     private static List getSourcesAndConverters(N5URI uri, N5Reader n5) throws IOException {
@@ -73,9 +106,8 @@ public class Main {
         final List sourcesAndConverters = new ArrayList<>();
 
         final BdvOptions options = BdvOptions.options().frameTitle("N5 Viewer");
-        int numTimepoints;
         try {
-            numTimepoints = buildN5Sources(
+            buildN5Sources(
                     n5,
                     selection,
                     sharedQueue,
@@ -98,7 +130,16 @@ public class Main {
         N5Viewer.show(n5URI);
     }
 
-	public static void main(String...args) throws URISyntaxException, IOException {
+    public static void showInBdv(N5URI uri, N5Reader n5) throws IOException {
+
+        List sourcesAndConverters = getSourcesAndConverters(uri, n5);
+        Bdv bdv = BdvFunctions.show( Bdv.options().frameTitle( "BigDataViewer" ) );
+//        final AbstractSpimData< ? > spimData = SourceToSpimDataWrapper.wrap( ((SourceAndConverter) sourcesAndConverters.get(0)).getSpimSource() );
+        SourceAndConverter spimData = (SourceAndConverter) sourcesAndConverters.get(0);
+        BdvFunctions.show(spimData, Bdv.options().addTo( bdv ));
+    }
+
+	public static void main(String...args) throws Exception {
 
         String uri;
         if(args.length == 0) {
@@ -113,7 +154,12 @@ public class Main {
         N5Factory n5Factory = new N5Factory();
         N5Reader n5 = n5Factory.openReader(uri);
 
-        showInBvv(n5URI, n5);
+//        showInBdv(n5URI, n5);
+
+//        Bvv bvv = showInBvv(n5URI, n5);
+
+        renderInBvv(n5URI, n5);
 
 	}
+
 }
