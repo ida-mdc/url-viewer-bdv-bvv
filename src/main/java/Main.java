@@ -12,7 +12,10 @@ import bvvpg.source.converters.ConverterSetupsPG;
 import bvvpg.vistools.Bvv;
 import bvvpg.vistools.BvvFunctions;
 import bvvpg.vistools.BvvGamma;
+import bvvpg.vistools.BvvStackSource;
+import com.google.gson.JsonObject;
 import mpicbg.spim.data.generic.AbstractSpimData;
+import net.imglib2.FinalRealInterval;
 import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.N5URI;
 import org.janelia.saalfeldlab.n5.bdv.N5Viewer;
@@ -57,18 +60,54 @@ public class Main {
                 ditherWidth(ditherWidth)
         );
 //        SourceAndConverter spimData = (SourceAndConverter) sourcesAndConverters.get(0);
+//        List<BvvStackSource<?>> sources = List.of();
         sourcesAndConverters.forEach(soc -> {
             final AbstractSpimData< ? > spimData = SourceToSpimDataWrapper.wrap( ((SourceAndConverter) soc).getSpimSource() );
-            BvvFunctions.show(spimData,
-                    Bvv.options().addTo( bvv ));
+            List<BvvStackSource<?>> bvvSource = BvvFunctions.show(spimData,
+                    Bvv.options().addTo(bvv));
+            prettify(bvvSource.get(0));
         });
+
         return bvv;
 
     }
 
+    private static void prettify(BvvStackSource<?> source) {
+
+        source.setDisplayRangeBounds( 0, 40000 );
+        source.setDisplayGamma(0.5);
+
+
+        //set volumetric rendering (1), instead of max intensity max intensity (0)
+        source.setRenderType(1);
+
+        //DisplayRange maps colors (or LUT values) to intensity values
+        source.setDisplayRange(200, 2000);
+        //it is also possible to change gamma value
+        //source.setDisplayGamma(0.9);
+
+        //alpha channel to intensity mapping can be changed independently
+//        source.setAlphaRange(0, 1000);
+        //it is also possible to change alpha-channel gamma value
+        //source.setAlphaGamma(0.9);
+
+        //assign a "Fire" lookup table to this source
+//        source.setLUT("Fire");
+
+        //or one can assign custom IndexColorModel + name as string
+        //in this illustration we going to get IndexColorModel from IJ
+        //(but it could be made somewhere else)
+        //final IndexColorModel icm_lut = LutLoader.getLut("Spectrum");
+        //source.setLUT( icm_lut, "SpectrumLUT" );
+
+
+        //clip half of the volume along Z axis in the shaders
+//        source.setClipInterval(new FinalRealInterval(new double[]{0, 0, 0}, new double[]{20000, 20000, 5000}));
+        //turn on clipping
+    }
 
     public static void renderInBvv(N5URI uri, N5Reader n5) throws Exception {
-        final java.util.List<SourceAndConverter<?>> socs = getSourcesAndConverters(uri, n5);
+        final List<SourceAndConverter<?>> socs = getSourcesAndConverters(uri, n5);
 
         final ViewerState state = new SynchronizedViewerState(new BasicViewerState());
         state.setNumTimepoints(1);
@@ -79,7 +118,7 @@ public class Main {
         for (SourceAndConverter<?> soc : socs) {
             state.addSource(soc);
             state.setSourceActive(soc, true);
-            final bdv.tools.brightness.ConverterSetup gcs = BvvGamma.createConverterSetupBT(soc, setupId++);
+            ConverterSetup gcs = BvvGamma.createConverterSetupBT(soc, setupId++);
             gcs.setDisplayRange(250, 2000);
             setups.put(soc, gcs);
         }
@@ -156,9 +195,9 @@ public class Main {
 
 //        showInBdv(n5URI, n5);
 
-//        Bvv bvv = showInBvv(n5URI, n5);
+        Bvv bvv = showInBvv(n5URI, n5);
 
-        renderInBvv(n5URI, n5);
+//        renderInBvv(n5URI, n5);
 
 	}
 
