@@ -182,7 +182,7 @@ public class Main {
 
         String uri;
         if(args.length == 0) {
-            uri = "https://hifis-storage.desy.de:2443/Helmholtz/HIP/collaborations/2405_MDC_Treier/public/G5111-S4/561nm_tdTomato?";
+            uri = "https://minio-dev.openmicroscopy.org/idr/v0.4/idr0077/9836832_z_dtype_fix.zarr";
         } else {
             uri = args[0];
         }
