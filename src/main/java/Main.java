@@ -1,21 +1,27 @@
+import bdv.BigDataViewer;
 import bdv.cache.CacheControl;
 import bdv.cache.SharedQueue;
+import bdv.spimdata.WrapBasicImgLoader;
 import bdv.tools.brightness.ConverterSetup;
 import bdv.util.Bdv;
 import bdv.util.BdvFunctions;
 import bdv.util.BdvOptions;
-import bdv.viewer.BasicViewerState;
-import bdv.viewer.SourceAndConverter;
-import bdv.viewer.SynchronizedViewerState;
-import bdv.viewer.ViewerState;
+import bdv.viewer.*;
 import bvvpg.source.converters.ConverterSetupsPG;
+import bvvpg.source.converters.RealARGBColorGammaConverterSetup;
 import bvvpg.vistools.Bvv;
 import bvvpg.vistools.BvvFunctions;
 import bvvpg.vistools.BvvGamma;
 import bvvpg.vistools.BvvStackSource;
-import com.google.gson.JsonObject;
+import ij.plugin.LutLoader;
 import mpicbg.spim.data.generic.AbstractSpimData;
 import net.imglib2.FinalRealInterval;
+import net.imglib2.cache.queue.BlockingFetchQueues;
+import net.imglib2.realtransform.AffineTransform3D;
+import net.imglib2.type.numeric.ARGBType;
+import net.imglib2.type.numeric.RealType;
+import net.imglib2.type.numeric.integer.UnsignedByteType;
+import net.imglib2.type.numeric.integer.UnsignedShortType;
 import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.N5URI;
 import org.janelia.saalfeldlab.n5.bdv.N5Viewer;
@@ -24,11 +30,16 @@ import org.janelia.saalfeldlab.n5.universe.N5Factory;
 import org.janelia.saalfeldlab.n5.universe.N5MetadataUtils;
 import org.janelia.saalfeldlab.n5.universe.metadata.N5Metadata;
 
+import java.awt.image.IndexColorModel;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.stream.Collectors;
 
+import static net.imglib2.type.numeric.ARGBType.rgba;
 import static org.janelia.saalfeldlab.n5.bdv.N5Viewer.buildN5Sources;
 
 
@@ -42,7 +53,7 @@ public class Main {
     static int renderHeight = 600;
     static int numDitherSamples = 3;
     static int cacheBlockSize = 32;
-    static int maxCacheSizeInMB = 7000;
+    static int maxCacheSizeInMB = 2000;
     static int ditherWidth = 3;
 
     public static Bvv showInBvv(N5URI uri, N5Reader n5) throws IOException {
@@ -72,6 +83,90 @@ public class Main {
 
     }
 
+    public static Bvv showInBvv(N5URI uri, N5URI uriLabels, N5Reader n5, N5Reader n5Labels) throws IOException {
+
+        List sourcesAndConverters = getSourcesAndConverters(uri, n5);
+        List sourcesAndConvertersLabels = getSourcesAndConverters(uriLabels, n5Labels);
+        Bvv bvv = BvvFunctions.show(Bvv.options().frameTitle("BigVolumeViewer").
+                dCam(dCam).
+                dClipNear(dClipNear).
+                dClipFar(dClipFar).
+                renderWidth(renderWidth).
+                renderHeight(renderHeight).
+                numDitherSamples(numDitherSamples).
+                cacheBlockSize(cacheBlockSize).
+                maxCacheSizeInMB(maxCacheSizeInMB).
+                ditherWidth(ditherWidth)
+        );
+//        SourceAndConverter spimData = (SourceAndConverter) sourcesAndConverters.get(0);
+//        List<BvvStackSource<?>> sources = List.of();
+        sourcesAndConverters.forEach(soc -> {
+            final AbstractSpimData< ? > spimData = SourceToSpimDataWrapper.wrap( ((SourceAndConverter) soc).getSpimSource() );
+            List<BvvStackSource<?>> bvvSource = BvvFunctions.show(spimData,
+                    Bvv.options().addTo(bvv));
+            prettify(bvvSource.get(0));
+        });
+        sourcesAndConvertersLabels.forEach(soc -> {
+            final AbstractSpimData< ? > spimData = SourceToSpimDataWrapper.wrap( ((SourceAndConverter) soc).getSpimSource() );
+            List<BvvStackSource<?>> bvvSource = BvvFunctions.show(spimData,
+                    Bvv.options().addTo(bvv));
+//            prettify(bvvSource.get(0));
+        });
+
+        return bvv;
+
+    }
+
+    public static Bvv showInBvvMasked(List<AbstractSpimData> sources) throws IOException {
+
+        Bvv bvv = BvvFunctions.show(Bvv.options().frameTitle("BigVolumeViewer").
+                dCam(dCam).
+                dClipNear(dClipNear).
+                dClipFar(dClipFar).
+                renderWidth(renderWidth).
+                renderHeight(renderHeight).
+                numDitherSamples(numDitherSamples).
+                cacheBlockSize(cacheBlockSize).
+                maxCacheSizeInMB(maxCacheSizeInMB).
+                ditherWidth(ditherWidth)
+        );
+
+        for(AbstractSpimData s : sources) {
+            List<BvvStackSource<?>> bvvSource = BvvFunctions.show(s,
+                    Bvv.options().addTo(bvv));
+        }
+
+        return bvv;
+
+    }
+
+    private static List<AbstractSpimData> getAbstractSpimData(N5URI uriSource, N5URI uriLabels, N5Reader n5, N5Reader n5Labels) throws IOException {
+
+        List<AbstractSpimData> sources = new ArrayList();
+
+        List<SourceAndConverter> sourcesAndConverters = getSourcesAndConverters(uriSource, n5);
+        List<SourceAndConverter> sourcesAndConvertersLabels = getSourcesAndConverters(uriLabels, n5Labels);
+        SourceAndConverter labelSac = sourcesAndConvertersLabels.get(0);
+
+//        SourceAndConverter spimData = (SourceAndConverter) sourcesAndConverters.get(0);
+//        List<BvvStackSource<?>> sources = List.of();
+        sourcesAndConverters.forEach(soc -> {
+            // Build the masked source
+            MaskedSource masked = new MaskedSource(
+                    soc.getSpimSource(),
+                    (Source<UnsignedShortType>) labelSac.getSpimSource(),
+                    getTargetLabels(),
+                    (RealType) soc.getSpimSource().getType());
+
+            // Reuse the same converter (maps T -> ARGB) as intensitySac
+            SourceAndConverter maskedSac =
+                    new SourceAndConverter<>(masked, soc.getConverter());
+            final AbstractSpimData< ? > spimData = SourceToSpimDataWrapper.wrap( maskedSac.getSpimSource() );
+            sources.add(spimData);
+//            prettify(bvvSource.get(0));
+        });
+        return sources;
+    }
     private static void prettify(BvvStackSource<?> source) {
 
         source.setDisplayRangeBounds( 0, 40000 );
@@ -106,25 +201,104 @@ public class Main {
         //turn on clipping
     }
 
+    private static void prettify(RealARGBColorGammaConverterSetup source) {
+
+        source.setDisplayGamma(0.9);
+        //set volumetric rendering (1), instead of max intensity max intensity (0)
+        source.setRenderType(1);
+
+
+        //DisplayRange maps colors (or LUT values) to intensity values
+        source.setDisplayRange(200, 500);
+        //it is also possible to change gamma value
+        source.setAlphaGamma(0.9);
+
+        //alpha channel to intensity mapping can be changed independently
+//        source.setAlphaRange(0, 1000);
+        //it is also possible to change alpha-channel gamma value
+        //source.setAlphaGamma(0.9);
+
+        //assign a "Fire" lookup table to this source
+//        source.setLUT("Fire");
+
+        //or one can assign custom IndexColorModel + name as string
+        //in this illustration we going to get IndexColorModel from IJ
+        //(but it could be made somewhere else)
+        final IndexColorModel icm_lut = LutLoader.getLut("Spectrum");
+        source.setLUT( icm_lut, "SpectrumLUT" );
+
+
+        //clip half of the volume along Z axis in the shaders
+//        source.setClipInterval(new FinalRealInterval(new double[]{0, 0, 0}, new double[]{20000, 20000, 500}));
+        //turn on clipping
+    }
+
     public static void renderInBvv(N5URI uri, N5Reader n5) throws Exception {
+
+
+
         final List<SourceAndConverter<?>> socs = getSourcesAndConverters(uri, n5);
 
         final ViewerState state = new SynchronizedViewerState(new BasicViewerState());
         state.setNumTimepoints(1);
 
-        int setupId = 0;
         final ConverterSetupsPG setups = new ConverterSetupsPG(state);
+        for (SourceAndConverter<?> source : socs) {
 
-        for (SourceAndConverter<?> soc : socs) {
-            state.addSource(soc);
-            state.setSourceActive(soc, true);
-            ConverterSetup gcs = BvvGamma.createConverterSetupBT(soc, setupId++);
-            gcs.setDisplayRange(250, 2000);
-            setups.put(soc, gcs);
+            final AbstractSpimData< ? > spimData = SourceToSpimDataWrapper.wrap( ((SourceAndConverter) source).getSpimSource() );
+
+            WrapBasicImgLoader.wrapImgLoaderIfNecessary( spimData );
+            final ArrayList< SourceAndConverter< ? > > sources = new ArrayList<>();
+            //BigDataViewer.initSetups( spimData, new ArrayList<>(), sources );
+            ArrayList<ConverterSetup> converterSetups = new ArrayList<>();
+            BvvGamma.initSetups(spimData, converterSetups, sources);
+
+            for (int i = 0; i < converterSetups.size(); i++) {
+                RealARGBColorGammaConverterSetup converterSetup = (RealARGBColorGammaConverterSetup) converterSetups.get(i);
+                SourceAndConverter soc = sources.get(i);
+                prettify(converterSetup);
+                                // Add ONLY the non-volatile to the ViewerState
+                state.addSource(soc);
+                state.setSourceActive(soc, true);
+
+                // Register converter setups for BOTH identities → lookups always succeed
+                setups.put(soc, converterSetup);
+                if (soc.asVolatile() != null) {
+                    setups.put(soc.asVolatile(), converterSetup);
+                }
+            }
+
+//            for ( final SourceAndConverter< ? > source2 : sources ) {
+//
+//
+//
+//                final RealARGBColorGammaConverterSetup gcs = (RealARGBColorGammaConverterSetup) BvvGamma.createConverterSetupBT(source2, setupId);
+//
+//                // Add ONLY the non-volatile to the ViewerState
+//                state.addSource(source2);
+//                state.setSourceActive(source2, true);
+//
+//                // Register converter setups for BOTH identities → lookups always succeed
+//                setups.put(source2, gcs);
+//                if (source2.asVolatile() != null) {
+//                    setups.put(source2.asVolatile(), gcs);
+//                }
+//
+//                // Configure display
+//                prettify(gcs);
+////                gcs.setColor(new ARGBType(rgba(255,255,255,255)));
+//                setupId++;
+//
+//            }
+
+            WrapBasicImgLoader.removeWrapperIfPresent( spimData );
+
         }
 
-        BvvRotateMovie movieGenerator = new BvvRotateMovie(state, setups, new CacheControl.Dummy(), 1920, 1080);
-        movieGenerator.recordRotateMovie(32, new File("/home/random/Development/hi/collabs/treier/bvv/frames"));
+        final CacheControl cache = new CacheControl.CacheControls();
+
+        BvvRotateMovie movieGenerator = new BvvRotateMovie(state, setups, cache, 1920, 1080);
+        movieGenerator.recordRotateMovie(20, new File("/home/random/Development/hi/collabs/treier/bvv/frames"));
     }
 
     private static List getSourcesAndConverters(N5URI uri, N5Reader n5) throws IOException {
@@ -188,16 +362,15 @@ public class Main {
         }
         N5URI n5URI = new N5URI(uri);
 
-//        showInBdv(n5URI);
+        //        showInBdv(n5URI);
 
         N5Factory n5Factory = new N5Factory();
         N5Reader n5 = n5Factory.openReader(uri);
 
 //        showInBdv(n5URI, n5);
 
-        Bvv bvv = showInBvv(n5URI, n5);
+        renderInBvv(n5URI, n5);
 
-//        renderInBvv(n5URI, n5);
 
 	}
 

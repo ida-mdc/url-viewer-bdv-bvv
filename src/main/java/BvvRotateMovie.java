@@ -1,27 +1,29 @@
 import bdv.cache.CacheControl;
+import bdv.tools.brightness.ConverterSetup;
 import bdv.viewer.SourceAndConverter;
 import bdv.viewer.ViewerState;
-import com.jogamp.opengl.util.awt.AWTGLReadBufferUtil;
-import net.imglib2.realtransform.AffineTransform3D;
-import net.imglib2.util.LinAlgHelpers;
-import net.imglib2.RandomAccessibleInterval;
-
 import bvvpg.core.multires.SourceStacks;
 import bvvpg.core.multires.Stack3D;
 import bvvpg.core.offscreen.OffScreenFrameBufferWithDepth;
-import bvvpg.core.render.RenderData;
 import bvvpg.core.render.VolumeRenderer;
 import bvvpg.core.render.VolumeRenderer.RepaintType;
 import bvvpg.core.util.MatrixMath;
 import bvvpg.source.converters.ConverterSetupsPG;
-
 import com.jogamp.opengl.*;
+import com.jogamp.opengl.util.awt.AWTGLReadBufferUtil;
+import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.realtransform.AffineTransform3D;
+import net.imglib2.util.LinAlgHelpers;
 import org.joml.Matrix4f;
+import org.joml.Vector4f;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -39,15 +41,15 @@ public class BvvRotateMovie {
     private final int ditherWidth = 0;          // use 0 for deterministic frames
     private final int numDitherSamples = 1;     // 1 = no stochastic sampling
     private final int[] cacheBlockSize = new int[]{64, 64, 64};      // tune if you know your setup
-    private final int maxCacheMB = 2048;        // VRAM-side cache budget
+    private final int maxCacheMB = 1048;        // VRAM-side cache budget
     private final int maxRenderMillis = 20;     // per pass budget (refinement)
     private final double maxAllowedStepInVoxels = 1.5; // ray step clamp
 
     // camera
-    private final double dCam = 2000.0;         // distance of the virtual camera
-    private final double clipNear = 0.01;
+    private final double dCam = 3000.0;         // distance of the virtual camera
+    private final double clipNear = 1;
     private final double clipFar  = 10000.0;
-    private final int projectionType = 0;       // 0 = perspective, 1 = ortho
+    private final int projectionType = 1;       // 0 = perspective, 1 = ortho
 
     public BvvRotateMovie(ViewerState state, ConverterSetupsPG setups,
                           CacheControl cache,
@@ -59,6 +61,124 @@ public class BvvRotateMovie {
         this.renderH = renderHeight;
     }
 
+    static void scaleAboutOrigin(ViewerState state, double s) {
+        final AffineTransform3D T = state.getViewerTransform().copy();
+        final AffineTransform3D S = new AffineTransform3D();
+        S.scale(s);
+        // OBJECT-SPACE op: RIGHT-multiply (concatenate)
+        final AffineTransform3D out = T.copy();
+        out.preConcatenate(S);   // <-- was preConcatenate(S)
+        state.setViewerTransform(out);
+    }
+
+    static void fitByScalingAboutOrigin(
+            ViewerState state,
+            double[] globalMin, double[] globalMax,
+            int screenW, int screenH,
+            int projectionType, double dCam, double clipNear, double clipFar,
+            double paddingFrac /* e.g. 0.85 */)
+    {
+        for (int iter = 0; iter < 8; iter++) {
+            final Matrix4f view = bvvpg.core.util.MatrixMath.affine(state.getViewerTransform(), new Matrix4f());
+            final Matrix4f proj = bvvpg.core.util.MatrixMath.screenPerspective(
+                    projectionType, dCam, clipNear, clipFar, screenW, screenH, 0, new Matrix4f());
+            final Matrix4f PV = new Matrix4f(proj).mul(view);
+
+            double minX = +1e9, minY = +1e9, maxX = -1e9, maxY = -1e9;
+            for (int k = 0; k < 8; k++) {
+                final double x = ((k & 1) == 0) ? globalMin[0] : globalMax[0];
+                final double y = ((k & 2) == 0) ? globalMin[1] : globalMax[1];
+                final double z = ((k & 4) == 0) ? globalMin[2] : globalMax[2];
+
+                Vector4f p = new Vector4f((float)x, (float)y, (float)z, 1f).mul(PV);
+                if (p.w <= 0) continue;
+                float ndcX = p.x / p.w, ndcY = p.y / p.w;
+                float sx = (ndcX * 0.5f + 0.5f) * screenW;
+                float sy = (1f - (ndcY * 0.5f + 0.5f)) * screenH;
+                minX = Math.min(minX, sx); maxX = Math.max(maxX, sx);
+                minY = Math.min(minY, sy); maxY = Math.max(maxY, sy);
+            }
+
+            double boxW = Math.max(1.0, maxX - minX);
+            double boxH = Math.max(1.0, maxY - minY);
+            double current = Math.max(boxW, boxH);
+            double target  = paddingFrac * Math.min(screenW, screenH);
+
+            if (Math.abs(current - target) / target < 0.02) break; // within 2%
+
+            // Scale so that current → target (clamp step to keep stable)
+            double s = target / current;                 // >1: grow, <1: shrink
+            s = Math.max(0.5, Math.min(2.0, s));        // avoid wild jumps
+            scaleAboutOrigin(state, s);
+        }
+    }
+
+    static void centerPivotOnScreen(
+            ViewerState state,
+            double[] pivot,
+            int screenW, int screenH,
+            int projectionType, double dCam, double clipNear, double clipFar)
+    {
+        // PV maps to *screen pixels*
+        final org.joml.Matrix4f view = bvvpg.core.util.MatrixMath.affine(
+                state.getViewerTransform(), new org.joml.Matrix4f());
+        final org.joml.Matrix4f proj = bvvpg.core.util.MatrixMath.screenPerspective(
+                projectionType, dCam, clipNear, clipFar, screenW, screenH, 0, new org.joml.Matrix4f());
+        final org.joml.Matrix4f PV = new org.joml.Matrix4f(proj).mul(view);
+
+        // Project pivot -> screen (already in pixels)
+        final org.joml.Vector4f ph = new org.joml.Vector4f(
+                (float)pivot[0], (float)pivot[1], (float)pivot[2], 1f).mul(PV);
+        if (ph.w == 0f) return;
+
+        final double sx = ph.x / ph.w;   // pixels
+        final double sy = ph.y / ph.w;   // pixels
+
+        // Desired center in pixels
+        final double cx = 0.5 * screenW;
+        final double cy = 0.5 * screenH;
+
+        // Pixel delta to move pivot to center
+        final double dx = cx - sx;
+        final double dy = cy - sy;
+
+        // Viewer-space translation: LEFT-multiply
+        final net.imglib2.realtransform.AffineTransform3D T = state.getViewerTransform().copy();
+        final net.imglib2.realtransform.AffineTransform3D V = new net.imglib2.realtransform.AffineTransform3D();
+        V.translate(dx, dy, 0.0);
+        T.preConcatenate(V);
+        state.setViewerTransform(T);
+    }
+
+    static void keepAABBInsideDepth(ViewerState state,
+                                    double[] gmin, double[] gmax,
+                                    double clipNear, double clipFar) {
+        final AffineTransform3D T = state.getViewerTransform().copy();
+
+        double zmin = 1e300, zmax = -1e300;
+        for (int k = 0; k < 8; k++) {
+            final double x = ((k & 1) == 0) ? gmin[0] : gmax[0];
+            final double y = ((k & 2) == 0) ? gmin[1] : gmax[1];
+            final double z = ((k & 4) == 0) ? gmin[2] : gmax[2];
+            final double[] v = new double[3];
+            T.apply(new double[]{x,y,z}, v);   // world -> viewer
+            zmin = Math.min(zmin, v[2]);
+            zmax = Math.max(zmax, v[2]);
+        }
+
+        // target center depth midway between near/far (any point well inside is fine)
+        final double zTarget = 0.5 * (clipNear + clipFar);
+        final double zCenter = 0.5 * (zmin + zmax);
+        final double dz = zTarget - zCenter;
+
+        if (Math.abs(dz) > 1e-6) {
+            final AffineTransform3D Vz = new AffineTransform3D();
+            Vz.translate(0, 0, dz);
+            T.preConcatenate(Vz);              // viewer-space translate
+            state.setViewerTransform(T);
+        }
+    }
+
     /** Main entry: render a 360° spin (around global Y) to PNG frames. */
     public void recordRotateMovie(int frames, File outDir) throws Exception {
         if (!outDir.isDirectory()) throw new IllegalArgumentException("outDir must exist: " + outDir);
@@ -68,6 +188,7 @@ public class BvvRotateMovie {
         final GLCapabilities caps = new GLCapabilities(profile);
         caps.setOnscreen(false);
         caps.setPBuffer(true);
+        caps.setDoubleBuffered(false);
         caps.setDoubleBuffered(false);
         final GLDrawableFactory factory = GLDrawableFactory.getFactory(profile);
         final GLAutoDrawable drawable = factory.createOffscreenAutoDrawable(
@@ -90,84 +211,101 @@ public class BvvRotateMovie {
 
         drawable.addGLEventListener(loop);
 //        drawable.display(); // triggers init()
+// 1. Calculate a single bounding box that encloses ALL visible sources.
+        final List<SourceAndConverter<?>> sources = state.getSources();
+        if (sources.isEmpty()) {
+            throw new IllegalStateException("No sources found in ViewerState. Cannot render.");
+        }
 
+        final double[] globalMin = { Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY };
+        final double[] globalMax = { Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY };
 
-// 1. Define the center of our screen (the pivot point for rotation).
-        final double cX = renderW / 2.0;
-        final double cY = renderH / 2.0;
-
-// 2. Calculate the object's center in world coordinates to create an initial view.
-        final SourceAndConverter<?> sac0 = state.getSources().get(0);
+        final AffineTransform3D sourceToGlobal = new AffineTransform3D();
         final int t = 0, level = 0;
-        final RandomAccessibleInterval<?> rai = sac0.getSpimSource().getSource(t, level);
-        final long sx = rai.dimension(0), sy = rai.dimension(1), sz = rai.dimension(2);
-        final double[] voxelCenter = { (sx - 1) / 2.0, (sy - 1) / 2.0, (sz - 1) / 2.0 };
-        final AffineTransform3D s2g = new AffineTransform3D();
-        sac0.getSpimSource().getSourceTransform(t, level, s2g);
-        final double[] pivot = new double[3];
-        s2g.apply(voxelCenter, pivot);
 
-// 3. Create the initial transform that centers the object. This is our starting point.
-        final AffineTransform3D initialTransform = new AffineTransform3D();
-        initialTransform.translate(-pivot[0], -pivot[1], -pivot[2]);
+        for (final SourceAndConverter<?> sac : sources) {
+            if (!state.isSourceVisible(sac)) continue; // Skip invisible sources
 
+            final RandomAccessibleInterval<?> rai = sac.getSpimSource().getSource(t, level);
+            final long sx = rai.dimension(0);
+            final long sy = rai.dimension(1);
+            final long sz = rai.dimension(2);
 
-// 4. Loop through frames, applying the correct rotation logic each time.
-        for (int i = 0; i < frames; i++) {
-            // Calculate the TOTAL angle for the current frame.
-            final double totalAngle = (2.0 * Math.PI * i) / frames;
-            final AffineTransform3D rotationTransform = new AffineTransform3D();
-            rotationTransform.rotate(1, totalAngle); // Rotation around the Y-axis
+            sac.getSpimSource().getSourceTransform(t, level, sourceToGlobal);
 
-            // Start with the initial object-centered view.
-            AffineTransform3D finalTransform = initialTransform.copy();
+            // Calculate the corners of this source's bounding box in world coordinates
+            final double[] p0 = new double[3];
+            final double[] p1 = new double[3];
+            sourceToGlobal.apply(new double[]{0, 0, 0}, p0);
+            sourceToGlobal.apply(new double[]{sx - 1, sy - 1, sz - 1}, p1);
 
-            // === REPLICATE THE RotationAnimator LOGIC ===
-            // a) Translate the view so the screen center (cX, cY) is at the origin.
-            finalTransform.set(finalTransform.get(0, 3) - cX, 0, 3);
-            finalTransform.set(finalTransform.get(1, 3) - cY, 1, 3);
-
-            // b) Apply the rotation. preConcatenate multiplies on the right (T_new = T_old * R).
-            finalTransform.preConcatenate(rotationTransform);
-
-            // c) Translate the view back.
-            finalTransform.set(finalTransform.get(0, 3) + cX, 0, 3);
-            finalTransform.set(finalTransform.get(1, 3) + cY, 1, 3);
-            // === END OF RotationAnimator LOGIC ===
-
-            // Set the final transform for this frame.
-            state.setViewerTransform(finalTransform);
-            state.setCurrentTimepoint(t);
-
-            // --- The rest of your rendering loop remains the same ---
-            loop.prepareFrame(state, projectionType, dCam, clipNear, clipFar, renderW, renderH, maxRenderMillis, maxAllowedStepInVoxels, cache);
-            do {
-                drawable.display();
-            } while (loop.lastRerender != RepaintType.NONE);
-
-            // Read back and save
-            final BufferedImage bi = loop.lastFrame;
-            if (bi != null) {
-                final File f = new File(outDir, String.format("bvv_%04d.png", i));
-                ImageIO.write(bi, "png", f);
-                System.out.println("Saved frame " + i);
+            // Update the global min/max corners
+            for (int d = 0; d < 3; ++d) {
+                globalMin[d] = Math.min(globalMin[d], Math.min(p0[d], p1[d]));
+                globalMax[d] = Math.max(globalMax[d], Math.max(p0[d], p1[d]));
             }
         }
 
+// 2. Calculate pivot and size
+        final double[] pivot = {
+                (globalMin[0] + globalMax[0]) * 0.5,
+                (globalMin[1] + globalMax[1]) * 0.5,
+                (globalMin[2] + globalMax[2]) * 0.5
+        };
+        final double diagonal = LinAlgHelpers.distance(globalMin, globalMax);
+        final double radius   = 0.5 * diagonal;
+// --- Build a clean base transform once ---
+// 1) center pivot at the origin (viewer space)
+// 2) push scene to +Z so it's in front of the camera
+// base: center pivot at origin, small push to +Z
+        final AffineTransform3D base = new AffineTransform3D();
+        base.translate(-pivot[0], -pivot[1], -pivot[2]);
+        base.rotate(2, 2*Math.PI/4);
+        base.rotate(0, 2*Math.PI/4*3);
+//        base.translate(0, 0, +1.0 * radius);
+        state.setViewerTransform(base);
+
+// Fit size by uniform scale about origin (your current ortho fit)
+        fitByScalingAboutOrigin(state, globalMin, globalMax, renderW, renderH,
+                projectionType, dCam, clipNear, clipFar, 1);
+
+// Now center the pivot to the screen center (one time)
+        centerPivotOnScreen(state, pivot, renderW, renderH, projectionType, dCam, clipNear, clipFar);
+        keepAABBInsideDepth(state, globalMin, globalMax, clipNear, clipFar);
+
+        System.out.println("globalMin=" + Arrays.toString(globalMin));
+        System.out.println("globalMax=" + Arrays.toString(globalMax));
+        System.out.println("pivot=" + Arrays.toString(pivot) + "  radius=" + radius);
+
+// 5. Loop through frames, using the same rendering logic as before.
+        for (int i = 0; i < frames; i++) {
+            double angle = 2.0 * Math.PI * i / frames;
+
+            AffineTransform3D R = new AffineTransform3D();
+            AffineTransform3D finalT = base.copy();
+            R.rotate(1, angle);                    // spin around Y            AffineTransform3D finalT = base.copy();
+            finalT.preConcatenate(R);   // object-space rotation around pivot
+            state.setViewerTransform(finalT);
+
+// Fit size by uniform scale about origin (your current ortho fit)
+            fitByScalingAboutOrigin(state, globalMin, globalMax, renderW, renderH,
+                    projectionType, dCam, clipNear, clipFar, 1);
+
+// Now center the pivot to the screen center (one time)
+            centerPivotOnScreen(state, pivot, renderW, renderH, projectionType, dCam, clipNear, clipFar);
+            keepAABBInsideDepth(state, globalMin, globalMax, clipNear, clipFar);
+
+            state.setCurrentTimepoint(t);
+            loop.prepareFrame(state, projectionType, dCam, clipNear, clipFar,
+                    renderW, renderH, maxRenderMillis, maxAllowedStepInVoxels, cache);
+            do { drawable.display(); } while (loop.lastRerender != RepaintType.NONE);
+            if (loop.lastFrame != null) {
+                ImageIO.write(loop.lastFrame, "png", new File(outDir, String.format("bvv_%04d.png", i)));
+            }
+        }
         drawable.destroy();
     }
 
-    // ---------- helpers ----------
-
-    private static AffineTransform3D translate(double tx, double ty, double tz) {
-        AffineTransform3D M = new AffineTransform3D();
-        M.set(
-                1,0,0,tx,
-                0,1,0,ty,
-                0,0,1,tz
-        );
-        return M;
-    }
 
     private static int getDitherStep(final int ditherWidth) {
         final int[] steps = { 0, 1, 3, 5, 9, 11, 19, 23, 29 };
@@ -187,7 +325,6 @@ public class BvvRotateMovie {
         private List<Stack3D<?>> stacks = Collections.emptyList();
         private List<bdv.tools.brightness.ConverterSetup> converters = Collections.emptyList();
         private Matrix4f pv = new Matrix4f();
-        private RenderData renderData;
         private long[] ioBudget = new long[]{100L * 1000000L, 10L * 1000000L};
         private int maxRenderMillis;
         private double maxAllowedStepInVoxels;
@@ -222,17 +359,27 @@ public class BvvRotateMovie {
 
             // stacks + converters for all visible sources at current t
             final int t = st.getCurrentTimepoint();
-            stacks = st.getVisibleAndPresentSources().stream().map(sac -> {
-                SourceAndConverter<?> s = sac;
-//                if (s.asVolatile() != null) s = s.asVolatile();
-                return SourceStacks.getStack3D(s.getSpimSource(), t);
-            }).collect(Collectors.toList());
+            Set<SourceAndConverter<?>> visible = st.getVisibleAndPresentSources();
 
-            converters = st.getVisibleAndPresentSources().stream()
-                    .map(setups::getConverterSetup)
+            stacks = visible.stream()
+                    .map(sac -> {
+                        final SourceAndConverter<?> sKey =
+                                (sac.asVolatile() != null) ? sac.asVolatile() : sac; // ✅ choose volatile if present
+                        return SourceStacks.getStack3D(sKey.getSpimSource(), t);
+                    })
                     .collect(Collectors.toList());
 
-            renderData = new RenderData(pv, t, st.getViewerTransform(), dCam, clipNear, clipFar, screenW, screenH);
+            converters = visible.stream()
+                    .map(sac -> {
+                        final SourceAndConverter<?> sKey =
+                                (sac.asVolatile() != null) ? sac.asVolatile() : sac; // ✅ same key as stacks
+                        ConverterSetup css = setups.getConverterSetup(sKey);
+                        if (css == null) css = setups.getConverterSetup(sac);          // fallback
+                        if (css == null) throw new IllegalStateException("No ConverterSetup for " + sKey);
+                        return css;
+                    })
+                    .collect(Collectors.toList());
+
         }
 
         @Override public void init(GLAutoDrawable drawable) {
