@@ -51,22 +51,22 @@ dependencies {
     implementation "org.janelia.saalfeldlab:n5-viewer_fiji:6.1.2"
     implementation "org.janelia.saalfeldlab:n5-universe:2.3.0"
 
-    implementation 'org.jogamp.gluegen:gluegen-rt:2.5.0'
-    implementation 'org.jogamp.jogl:jogl-all:2.5.0'
+    implementation 'org.jogamp.gluegen:gluegen-rt:2.6.0'
+    implementation 'org.jogamp.jogl:jogl-all:2.6.0'
 
     if (os.contains("linux")) {
-        implementation 'org.jogamp.gluegen:gluegen-rt:2.5.0:natives-linux-amd64'
-        implementation 'org.jogamp.jogl:jogl-all:2.5.0:natives-linux-amd64'
+        implementation 'org.jogamp.gluegen:gluegen-rt:2.6.0:natives-linux-amd64'
+        implementation 'org.jogamp.jogl:jogl-all:2.6.0:natives-linux-amd64'
     }
 
     if (os.contains("windows")) {
-        implementation 'org.jogamp.gluegen:gluegen-rt:2.5.0:natives-windows-amd64'
-        implementation 'org.jogamp.jogl:jogl-all:2.5.0:natives-windows-amd64'
+        implementation 'org.jogamp.gluegen:gluegen-rt:2.6.0:natives-windows-amd64'
+        implementation 'org.jogamp.jogl:jogl-all:2.6.0:natives-windows-amd64'
     }
 
     if (os.contains("mac")) {
-        implementation 'org.jogamp.gluegen:gluegen-rt:2.5.0:natives-macosx-universal'
-        implementation 'org.jogamp.jogl:jogl-all:2.5.0:natives-macosx-universal'
+        implementation 'org.jogamp.gluegen:gluegen-rt:2.6.0:natives-macosx-universal'
+        implementation 'org.jogamp.jogl:jogl-all:2.6.0:natives-macosx-universal'
     }
 }
 // configurations.all {

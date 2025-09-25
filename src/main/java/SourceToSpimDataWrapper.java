@@ -1,13 +1,3 @@
-import java.io.File;
-import java.util.ArrayList;
-import java.util.HashMap;
-
-import net.imglib2.FinalDimensions;
-import net.imglib2.realtransform.AffineTransform3D;
-import net.imglib2.type.NativeType;
-import net.imglib2.type.numeric.RealType;
-import net.imglib2.util.Util;
-
 import bdv.spimdata.SequenceDescriptionMinimal;
 import bdv.viewer.Source;
 import mpicbg.spim.data.generic.AbstractSpimData;
@@ -16,6 +6,12 @@ import mpicbg.spim.data.registration.ViewRegistration;
 import mpicbg.spim.data.registration.ViewRegistrations;
 import mpicbg.spim.data.sequence.TimePoint;
 import mpicbg.spim.data.sequence.TimePoints;
+import net.imglib2.FinalDimensions;
+import net.imglib2.realtransform.AffineTransform3D;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.HashMap;
 
 public class SourceToSpimDataWrapper
 {
